@@ -1,8 +1,15 @@
-import { deflateSync } from 'node:zlib';
+import { deflateSync, inflateSync } from 'node:zlib';
 import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { computeLayout, initialAdjust, moveContent, setPaperSize, toPdfPlacement, type SourceGeometry } from '../geometry';
-import { contentMatrix, createCalibrationPdf, exportPdfFromPdf, exportPdfFromPng } from '../pdfUtils';
+import {
+  contentMatrix,
+  createCalibrationPdf,
+  exportPdfFromPdf,
+  exportPdfFromPng,
+  loadPdfDocument,
+  readPdfPageInfo,
+} from '../pdfUtils';
 import { crc32, makePhysChunk, parseChunks, readPngInfo, setPngDpi } from '../pngUtils';
 import { mmToPt, pxToMm } from '../units';
 
@@ -134,6 +141,33 @@ describe('PDF export', () => {
     expect(forms).toHaveLength(1);
     const bbox = (forms[0] as PDFRawStream).dict.lookup(PDFName.of('BBox'), PDFArray);
     expect((bbox.lookup(2) as PDFNumber).asNumber()).toBeCloseTo(mmToPt(210), 4);
+  });
+
+  it('honours /UserUnit of the source page (physical size = box × UserUnit)', async () => {
+    // A 297 × 420 mm (A3) page described in UserUnit 2: the box is half-size in user units.
+    const srcDoc = await PDFDocument.create();
+    const p = srcDoc.addPage([mmToPt(297) / 2, mmToPt(420) / 2]);
+    p.node.set(PDFName.of('UserUnit'), PDFNumber.of(2));
+    p.drawRectangle({ x: 10, y: 10, width: 100, height: 100 });
+    const srcBytes = await srcDoc.save();
+
+    const loaded = await loadPdfDocument(srcBytes);
+    const info = readPdfPageInfo(loaded, 0);
+    expect(info.userUnit).toBe(2);
+    expect(info.widthMm).toBeCloseTo(297, 9);
+    expect(info.heightMm).toBeCloseTo(420, 9);
+
+    const src: SourceGeometry = { kind: 'pdf', widthMm: info.widthMm, heightMm: info.heightMm, dpi: 600 };
+    const out = await PDFDocument.load(await exportPdfFromPdf(srcBytes, 0, computeLayout(src, initialAdjust(src))));
+    const [, , w, h] = mediaBox(out);
+    expect(w).toBeCloseTo(mmToPt(297), 4);
+    expect(h).toBeCloseTo(mmToPt(420), 4);
+    expect(out.getPage(0).node.get(PDFName.of('UserUnit'))).toBeUndefined();
+    // The form (in user units) must be drawn at 2×.
+    const contents = out.getPage(0).node.Contents();
+    const streams = (contents instanceof PDFArray ? contents.asArray().map((r) => out.context.lookup(r)) : [contents]) as PDFRawStream[];
+    const content = streams.map((s) => new TextDecoder('latin1').decode(inflateSync(s.contents))).join('\n');
+    expect(content).toMatch(/(^|\s)2 0 0 2 0 0 cm/);
   });
 
   it('calibration PDF has the requested page size', async () => {

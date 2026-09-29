@@ -16,6 +16,7 @@ import {
   PDFDocument,
   PDFHexString,
   PDFName,
+  PDFNumber,
   PDFPage,
   PDFRawStream,
   StandardFonts,
@@ -38,6 +39,8 @@ export interface PdfPageInfo {
   box: { x: number; y: number; width: number; height: number };
   /** Normalised /Rotate: 0, 90, 180 or 270 (clockwise). */
   rotation: number;
+  /** /UserUnit of the page: size of one user-space unit in multiples of 1/72 inch (default 1). */
+  userUnit: number;
   /** Displayed size in pt (after rotation). */
   widthPt: number;
   heightPt: number;
@@ -49,16 +52,26 @@ export function normalizeRotation(angle: number): number {
   return (((Math.round(angle / 90) * 90) % 360) + 360) % 360;
 }
 
+/** Reads /UserUnit (PDF 1.6). Scanners and converters use it for large pages. */
+export function readUserUnit(page: PDFPage): number {
+  const v = page.node.lookup(PDFName.of('UserUnit'));
+  const n = v instanceof PDFNumber ? v.asNumber() : 1;
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 function pageInfo(doc: PDFDocument, page: PDFPage): PdfPageInfo {
   const box = page.getCropBox();
   const rotation = normalizeRotation(page.getRotation().angle);
+  const userUnit = readUserUnit(page);
   const swap = rotation === 90 || rotation === 270;
-  const widthPt = swap ? box.height : box.width;
-  const heightPt = swap ? box.width : box.height;
+  // Physical size in points = user-space size × UserUnit.
+  const widthPt = (swap ? box.height : box.width) * userUnit;
+  const heightPt = (swap ? box.width : box.height) * userUnit;
   return {
     pageCount: doc.getPageCount(),
     box,
     rotation,
+    userUnit,
     widthPt,
     heightPt,
     widthMm: ptToMm(widthPt),

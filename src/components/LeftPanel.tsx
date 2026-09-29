@@ -127,6 +127,15 @@ function FileSection({
                   <dd>{file.page.rotation}°（表示向きで扱います）</dd>
                 </>
               )}
+              {file.page.userUnit !== 1 && (
+                <>
+                  <dt>UserUnit</dt>
+                  <dd>
+                    ×{formatSmart(file.page.userUnit, 3)}
+                    <div className="hint">ページ単位が拡大されたPDFです。実寸に換算して扱い、出力では通常の単位（1/72 inch）に変換します。</div>
+                  </dd>
+                </>
+              )}
             </>
           )}
         </dl>
