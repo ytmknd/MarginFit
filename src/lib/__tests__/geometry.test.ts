@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  a4For,
+  fitDpiToPaper,
+  isImplausibleSheetSize,
   addMargin,
   centerContent,
   computeLayout,
@@ -113,6 +116,31 @@ describe('editing operations', () => {
     const l = computeLayout(pdfA4, a);
     expect(l.content.x + l.content.width / 2).toBeCloseTo(105, 12);
     expect(l.content.width).toBeCloseTo(210.42, 12);
+  });
+});
+
+describe('DPI helpers', () => {
+  it('fitDpiToPaper: the limiting side matches A4 exactly', () => {
+    // 1061 × 1482 px image without DPI (the reported case): fits A4 at ~128.3 dpi
+    const dpi = fitDpiToPaper(1061, 1482, 210, 297);
+    expect(dpi).toBeCloseTo(128.33, 2);
+    expect(pxToMm(1061, dpi)).toBeCloseTo(210, 9);
+    expect(pxToMm(1482, dpi)).toBeLessThanOrEqual(297);
+    // A real 600 dpi A4 scan
+    expect(fitDpiToPaper(4961, 7016, 210, 297)).toBeCloseTo(600, 0);
+  });
+
+  it('a4For picks the orientation of the image', () => {
+    expect(a4For(1061, 1482)).toEqual({ widthMm: 210, heightMm: 297 });
+    expect(a4For(1482, 1061)).toEqual({ widthMm: 297, heightMm: 210 });
+  });
+
+  it('isImplausibleSheetSize flags DPI mistakes but accepts A4 / B4 / A3 / special sizes', () => {
+    expect(isImplausibleSheetSize(44.9, 62.7)).toBe(true); // 1061 × 1482 px at an assumed 600 dpi
+    expect(isImplausibleSheetSize(1750, 2474)).toBe(true); // 600 dpi scan read as 72 dpi
+    for (const [w, h] of [[210, 297], [216.3, 297], [257, 364], [297, 420], [297, 210]]) {
+      expect(isImplausibleSheetSize(w, h)).toBe(false);
+    }
   });
 });
 

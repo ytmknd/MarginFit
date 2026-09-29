@@ -14,7 +14,7 @@ interface State {
 }
 
 type Action =
-  | { type: 'load'; file: LoadedFile }
+  | { type: 'load'; file: LoadedFile; prepare?: (src: SourceGeometry, adj: Adjust) => Adjust }
   | { type: 'apply'; adjust: Adjust }
   | { type: 'undo' }
   | { type: 'redo' }
@@ -31,6 +31,11 @@ function reducer(s: State, a: Action): State {
     case 'load': {
       const source = sourceGeometry(a.file);
       const initial = initialAdjust(source);
+      // An optional first edit (e.g. "fit to A4") becomes one undoable step after the load.
+      const prepared = a.prepare?.(source, initial);
+      if (prepared && !validateAdjust(source, prepared) && !sameAdjust(prepared, initial)) {
+        return { file: a.file, source, initial, past: [initial], present: prepared, future: [] };
+      }
       return { file: a.file, source, initial, past: [], present: initial, future: [] };
     }
     case 'apply':
@@ -61,7 +66,8 @@ export interface Editor {
   canUndo: boolean;
   canRedo: boolean;
   isModified: boolean;
-  load: (file: LoadedFile) => void;
+  /** Loads a file. `prepare` optionally applies a first edit (undoable) to the freshly loaded state. */
+  load: (file: LoadedFile, prepare?: (src: SourceGeometry, adj: Adjust) => Adjust) => void;
   /** Applies an edit; returns an error message if the result is invalid (and then does nothing). */
   apply: (fn: (src: SourceGeometry, adj: Adjust) => Adjust) => string | null;
   undo: () => void;
@@ -95,7 +101,10 @@ export function useEditor(): Editor {
     canUndo: s.past.length > 0,
     canRedo: s.future.length > 0,
     isModified: !!s.present && !!s.initial && !sameAdjust(s.present, s.initial),
-    load: useCallback((file: LoadedFile) => dispatch({ type: 'load', file }), []),
+    load: useCallback(
+      (file: LoadedFile, prepare?: (src: SourceGeometry, adj: Adjust) => Adjust) => dispatch({ type: 'load', file, prepare }),
+      [],
+    ),
     apply,
     undo: useCallback(() => dispatch({ type: 'undo' }), []),
     redo: useCallback(() => dispatch({ type: 'redo' }), []),

@@ -72,12 +72,22 @@ export function Viewer({ file, layout, background, guides, calibration, toolbar 
     setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z)));
   }, [W, H]);
 
-  // Fit to screen whenever a new file is loaded.
-  const fitRef = useRef(fit);
-  fitRef.current = fit;
+  // Show every newly loaded file at 100 % (real size on a 96 dpi screen), so an
+  // obviously wrong physical size is noticed immediately; scroll to the paper's top.
+  const initialView = useRef(false);
   useLayoutEffect(() => {
-    fitRef.current();
+    anchor.current = null;
+    initialView.current = true;
+    setZoom(1);
   }, [file]);
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (!el || !initialView.current || zoom !== 1) return;
+    initialView.current = false;
+    el.scrollLeft = Math.max(0, ox + (W * k) / 2 - el.clientWidth / 2);
+    el.scrollTop = Math.max(0, oy - PAD);
+    setScroll({ x: el.scrollLeft, y: el.scrollTop });
+  }, [file, zoom, ox, oy, k, W]);
 
   const zoomTo = useCallback(
     (z: number, vx?: number, vy?: number) => {

@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import {
+  A4_LANDSCAPE,
+  a4For,
   addMargin,
   centerContent,
+  fitDpiToPaper,
+  isImplausibleSheetSize,
   equalizeHorizontal,
   equalizeVertical,
   setAllMargins,
@@ -10,9 +14,9 @@ import {
   type PaperAnchor,
   type Side,
 } from '../lib/geometry';
-import type { LoadedFile } from '../lib/loader';
+import { LOW_DPI_WARNING, type LoadedFile, type LoadedPng } from '../lib/loader';
 import type { Background } from '../lib/pngUtils';
-import { formatLength, fromUnit, toUnit, type LengthUnit } from '../lib/units';
+import { formatLength, fromUnit, pxToMm, toUnit, type LengthUnit } from '../lib/units';
 import type { Editor } from '../state/useEditor';
 import { formatSmart, NumberField, Section, Segmented } from './common';
 
@@ -23,17 +27,24 @@ interface Props {
   editor: Editor;
   onOpen: () => void;
   onChangeDpi: (dpi: number) => void;
+  onFitDpiToA4: () => void;
   onChangePage: (pageIndex: number) => void;
   background: Background;
   onBackground: (b: Background) => void;
   notify: (msg: string | null) => void;
 }
 
-export function LeftPanel({ editor, onOpen, onChangeDpi, onChangePage, background, onBackground, notify }: Props) {
+export function LeftPanel({ editor, onOpen, onChangeDpi, onFitDpiToA4, onChangePage, background, onBackground, notify }: Props) {
   const { file } = editor;
   return (
     <aside className="panel panel-left">
-      <FileSection file={file} onOpen={onOpen} onChangeDpi={onChangeDpi} onChangePage={onChangePage} />
+      <FileSection
+        file={file}
+        onOpen={onOpen}
+        onChangeDpi={onChangeDpi}
+        onFitDpiToA4={onFitDpiToA4}
+        onChangePage={onChangePage}
+      />
       {file && editor.adjust && editor.source && (
         <>
           <PaperSection editor={editor} notify={notify} />
@@ -61,11 +72,13 @@ function FileSection({
   file,
   onOpen,
   onChangeDpi,
+  onFitDpiToA4,
   onChangePage,
 }: {
   file: LoadedFile | null;
   onOpen: () => void;
   onChangeDpi: (dpi: number) => void;
+  onFitDpiToA4: () => void;
   onChangePage: (i: number) => void;
 }) {
   return (
@@ -99,8 +112,9 @@ function FileSection({
                 <div className={file.fileDpi ? 'hint' : 'hint warn'}>
                   {file.fileDpi
                     ? `ファイルのDPI情報: ${formatSmart(file.fileDpi, 0)} dpi`
-                    : 'DPI情報がないため 600 dpi と仮定しています。スキャン時の解像度を指定してください。'}
+                    : `DPI情報がありません（${formatSmart(file.dpi, 0)} dpi として計算中）。スキャン時の解像度を指定してください。`}
                 </div>
+                <DpiCheck file={file} onFitDpiToA4={onFitDpiToA4} />
               </dd>
             </>
           )}
@@ -141,6 +155,38 @@ function FileSection({
         </dl>
       )}
     </Section>
+  );
+}
+
+/**
+ * Shows the physical size the current DPI implies, warns when it cannot be a
+ * printed sheet, and offers to derive the DPI from A4.
+ */
+function DpiCheck({ file, onFitDpiToA4 }: { file: LoadedPng; onFitDpiToA4: () => void }) {
+  const { width, height } = file.info;
+  const wMm = pxToMm(width, file.dpi);
+  const hMm = pxToMm(height, file.dpi);
+  const a4 = a4For(width, height);
+  const a4Dpi = fitDpiToPaper(width, height, a4.widthMm, a4.heightMm);
+  const implausible = isImplausibleSheetSize(wMm, hMm);
+  const alreadyA4 = Math.abs(a4Dpi - file.dpi) < 0.05;
+  return (
+    <div className={implausible ? 'dpi-check bad' : 'dpi-check'}>
+      <div>
+        {width} × {height} px → <strong>{formatSmart(wMm)} × {formatSmart(hMm)} mm</strong>
+      </div>
+      {implausible && <div className="dpi-check-msg">用紙として不自然な大きさです。DPIが正しくない可能性があります。</div>}
+      {!alreadyA4 && (
+        <button type="button" className="wide" onClick={onFitDpiToA4}>
+          A4{a4 === A4_LANDSCAPE ? '横' : '縦'}に合わせてDPIを計算（{formatSmart(a4Dpi, 1)} dpi）
+        </button>
+      )}
+      {a4Dpi < LOW_DPI_WARNING && (
+        <div className="dpi-check-msg">
+          A4に対して約 {formatSmart(a4Dpi, 0)} dpi しかありません。印刷すると粗くなるため、600 dpi 程度でスキャンした画像の使用をおすすめします。
+        </div>
+      )}
+    </div>
   );
 }
 

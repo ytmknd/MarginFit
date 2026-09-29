@@ -11,6 +11,8 @@ import { pxToMm } from './units';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 export const DEFAULT_DPI = 600;
+/** Below this resolution a certificate background will look coarse when printed. */
+export const LOW_DPI_WARNING = 200;
 /** Resolution of the on-screen PDF preview bitmap (does not affect output). */
 const PDF_PREVIEW_DPI = 200;
 const PDF_PREVIEW_MAX_SIDE = 6000;

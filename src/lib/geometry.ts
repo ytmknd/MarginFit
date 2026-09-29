@@ -18,7 +18,7 @@
  * (pngUtils / pdfUtils) consume the same result, so preview and output cannot
  * disagree.
  */
-import { mmToPt, mmToPx, pxToMm } from './units';
+import { mmToInch, mmToPt, mmToPx, pxToMm } from './units';
 
 export type SourceKind = 'png' | 'pdf';
 
@@ -293,6 +293,36 @@ export function setScale(src: SourceGeometry, adj: Adjust, scaleX: number, scale
   const w = src.widthMm * scaleX;
   const h = src.heightMm * scaleY;
   return { ...adj, scaleX, scaleY, offsetXmm: cx - w / 2, offsetYmm: cy - h / 2 };
+}
+
+// ---------------------------------------------------------------------------
+// DPI helpers for images without (or with wrong) resolution information
+// ---------------------------------------------------------------------------
+
+export const A4_PORTRAIT = { widthMm: 210, heightMm: 297 };
+export const A4_LANDSCAPE = { widthMm: 297, heightMm: 210 };
+
+/** A4 in the same orientation as the image. */
+export function a4For(pixelWidth: number, pixelHeight: number) {
+  return pixelWidth > pixelHeight ? A4_LANDSCAPE : A4_PORTRAIT;
+}
+
+/**
+ * DPI at which an image of the given pixel size fits inside the paper
+ * (the limiting side matches the paper exactly, the other side is ≤ paper).
+ */
+export function fitDpiToPaper(pixelWidth: number, pixelHeight: number, paperWidthMm: number, paperHeightMm: number): number {
+  // dpi at which `px` pixels span `mm` millimetres = px / inches
+  return Math.max(pixelWidth / mmToInch(paperWidthMm), pixelHeight / mmToInch(paperHeightMm));
+}
+
+/** Plausible range for the longer side of a certificate / document scan (A5 … A3 with margin). */
+export const PLAUSIBLE_LONG_SIDE_MM = { min: 180, max: 450 };
+
+/** True if a physical size looks wrong for a printed sheet (usually a DPI problem). */
+export function isImplausibleSheetSize(widthMm: number, heightMm: number): boolean {
+  const long = Math.max(widthMm, heightMm);
+  return long < PLAUSIBLE_LONG_SIDE_MM.min || long > PLAUSIBLE_LONG_SIDE_MM.max;
 }
 
 /** Returns an error message if the adjust would produce an invalid output, otherwise null. */

@@ -5,8 +5,17 @@ import { LeftPanel } from './components/LeftPanel';
 import { MOVE_STEP_MM, MOVE_STEP_SHIFT_MM, RightPanel } from './components/RightPanel';
 import { Viewer, type GuideOptions } from './components/Viewer';
 import { downloadBytes } from './lib/download';
-import { moveContent } from './lib/geometry';
-import { loadFile, loadPdf, releaseFile, type LoadedFile } from './lib/loader';
+import {
+  a4For,
+  centerContent,
+  fitDpiToPaper,
+  isImplausibleSheetSize,
+  moveContent,
+  setPaperSize,
+  type Adjust,
+  type SourceGeometry,
+} from './lib/geometry';
+import { loadFile, loadPdf, LOW_DPI_WARNING, releaseFile, sourceGeometry, type LoadedFile } from './lib/loader';
 import { createCalibrationPdf } from './lib/pdfUtils';
 import type { Background } from './lib/pngUtils';
 import { useEditor } from './state/useEditor';
@@ -29,11 +38,11 @@ export default function App() {
     if (text) setMessage({ text, kind: 'error' });
   }, []);
 
-  const replaceFile = (f: LoadedFile) => {
+  const replaceFile = (f: LoadedFile, prepare?: (src: SourceGeometry, adj: Adjust) => Adjust) => {
     // A DPI change reuses the same decoded image; only release truly replaced files.
     if (fileRef.current && fileRef.current.previewUrl !== f.previewUrl) releaseFile(fileRef.current);
     fileRef.current = f;
-    editor.load(f);
+    editor.load(f, prepare);
     if (f.kind === 'pdf') setBackground('white');
   };
 
@@ -46,7 +55,15 @@ export default function App() {
     try {
       const f = await loadFile(file);
       replaceFile(f);
-      setMessage({ text: `${f.fileName} を読み込みました。`, kind: 'info' });
+      const g = sourceGeometry(f);
+      if (isImplausibleSheetSize(g.widthMm, g.heightMm)) {
+        setMessage({
+          text: `実寸が ${formatSmart(g.widthMm)} × ${formatSmart(g.heightMm)} mm になっています。DPIが正しいか確認してください。`,
+          kind: 'error',
+        });
+      } else {
+        setMessage({ text: `${f.fileName} を読み込みました。`, kind: 'info' });
+      }
     } catch (e) {
       setMessage({ text: e instanceof Error ? e.message : String(e), kind: 'error' });
     } finally {
@@ -61,6 +78,20 @@ export default function App() {
     // Same image, different physical size: restart editing from the new size.
     replaceFile({ ...f, dpi });
     setMessage({ text: `DPIを ${formatSmart(dpi, 0)} に変更しました（調整はリセットされました）。`, kind: 'info' });
+  };
+
+  /** Sets the DPI so the image fits A4 (same orientation), then puts it centered on an exact A4 sheet. */
+  const fitDpiToA4 = () => {
+    const f = editor.file;
+    if (!f || f.kind !== 'png') return;
+    if (!confirmDiscard()) return;
+    const a4 = a4For(f.info.width, f.info.height);
+    const dpi = fitDpiToPaper(f.info.width, f.info.height, a4.widthMm, a4.heightMm);
+    replaceFile({ ...f, dpi }, (src, adj) => centerContent(src, setPaperSize(adj, a4.widthMm, a4.heightMm, 'top-left')));
+    setMessage({
+      text: `A4に合わせて ${formatSmart(dpi, 1)} dpi に設定しました（Undoで取り消し可）。`,
+      kind: dpi < LOW_DPI_WARNING ? 'error' : 'info',
+    });
   };
 
   const changePage = async (pageIndex: number) => {
@@ -197,6 +228,7 @@ export default function App() {
           editor={editor}
           onOpen={() => inputRef.current?.click()}
           onChangeDpi={changeDpi}
+          onFitDpiToA4={fitDpiToA4}
           onChangePage={(i) => void changePage(i)}
           background={background}
           onBackground={setBackground}

@@ -319,6 +319,24 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dpi-check {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #f8f9fb;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dpi-check.bad {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+.dpi-check-msg {
+  color: var(--danger);
+  margin-top: 4px;
+  line-height: 1.45;
+}
 .size-now {
   background: var(--accent-soft);
   padding: 6px 8px;
