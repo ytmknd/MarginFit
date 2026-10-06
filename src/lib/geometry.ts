@@ -247,6 +247,17 @@ export function moveContent(adj: Adjust, dxMm: number, dyMm: number): Adjust {
   };
 }
 
+/**
+ * Compensates a measured print offset. `printedRightMm` / `printedDownMm` are
+ * how far the printed artwork landed to the right of / below the real
+ * pre-printed artwork on the sheet (negative = left / up). The content is
+ * moved by the opposite amount, which cancels both scan misplacement and the
+ * printer's own offset for that printer.
+ */
+export function correctPrintOffset(adj: Adjust, printedRightMm: number, printedDownMm: number): Adjust {
+  return moveContent(adj, -printedRightMm, -printedDownMm);
+}
+
 /** Makes left and right margins equal by moving the content (paper size unchanged). */
 export function equalizeHorizontal(src: SourceGeometry, adj: Adjust): Adjust {
   const c = contentSizeMm(src, adj);

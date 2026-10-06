@@ -1,5 +1,5 @@
 import { useState, type MouseEvent } from 'react';
-import { moveContent, setScale, type Layout, type SourceGeometry } from '../lib/geometry';
+import { correctPrintOffset, moveContent, setScale, type Layout, type SourceGeometry } from '../lib/geometry';
 import type { LoadedFile } from '../lib/loader';
 import { mmToPt, mmToPx, pxToMm, roundTo } from '../lib/units';
 import type { Editor } from '../state/useEditor';
@@ -20,6 +20,7 @@ export function RightPanel({ editor, notify }: Props) {
   return (
     <aside className="panel panel-right">
       <MoveSection editor={editor} notify={notify} />
+      <PrintOffsetSection editor={editor} notify={notify} />
       <ScaleSection editor={editor} notify={notify} />
       <InfoSection file={editor.file} source={editor.source} layout={editor.layout} />
     </aside>
@@ -80,6 +81,68 @@ function MoveSection({ editor, notify }: Props) {
           右 {formatSmart(adj.moveXmm, 2)} ／ 下 {formatSmart(adj.moveYmm, 2)} mm
         </dd>
       </dl>
+    </Section>
+  );
+}
+
+/**
+ * Enter the offset exactly as seen on the test print ("printed 1.2 mm to the
+ * right"); the artwork is moved the opposite way. Avoids sign mistakes.
+ */
+function PrintOffsetSection({ editor, notify }: Props) {
+  const [hDir, setHDir] = useState<1 | -1>(1); // 1 = right, -1 = left
+  const [vDir, setVDir] = useState<1 | -1>(1); // 1 = down, -1 = up
+  const [h, setH] = useState(0);
+  const [v, setV] = useState(0);
+  const printedRight = hDir * h;
+  const printedDown = vDir * v;
+  const none = h === 0 && v === 0;
+
+  const describe = () => {
+    const parts: string[] = [];
+    if (h) parts.push(`${printedRight > 0 ? '左' : '右'}へ ${formatSmart(h, 2)} mm`);
+    if (v) parts.push(`${printedDown > 0 ? '上' : '下'}へ ${formatSmart(v, 2)} mm`);
+    return parts.join('、');
+  };
+
+  return (
+    <Section title="印刷のずれを補正">
+      <p className="hint">
+        試し刷り（Export… →「位置合わせ用の試し刷りPDF」）を実物と重ね、印刷された下絵が本物の印刷からどちらへ何 mm ずれていたかを、見たまま入力してください。
+      </p>
+      <div className="row">
+        <span className="offset-label">印刷が</span>
+        <select value={hDir} onChange={(e) => setHDir(Number(e.target.value) as 1 | -1)} aria-label="左右のずれの向き">
+          <option value={1}>右へ</option>
+          <option value={-1}>左へ</option>
+        </select>
+        <NumberField value={h} unit="mm" min={0} max={50} width={56} onCommit={setH} ariaLabel="左右のずれ量" />
+      </div>
+      <div className="row">
+        <span className="offset-label">印刷が</span>
+        <select value={vDir} onChange={(e) => setVDir(Number(e.target.value) as 1 | -1)} aria-label="上下のずれの向き">
+          <option value={1}>下へ</option>
+          <option value={-1}>上へ</option>
+        </select>
+        <NumberField value={v} unit="mm" min={0} max={50} width={56} onCommit={setV} ariaLabel="上下のずれ量" />
+      </div>
+      <button
+        type="button"
+        className="wide"
+        disabled={none}
+        onClick={() => {
+          const err = editor.apply((_s, a) => correctPrintOffset(a, printedRight, printedDown));
+          notify(err);
+          if (!err) {
+            setH(0);
+            setV(0);
+          }
+        }}
+      >
+        ずれを打ち消す
+      </button>
+      <p className="hint">{none ? 'ずれていた量を入力すると、下絵を逆方向へ移動します。' : `下絵を ${describe()} 移動します。`}</p>
+      <p className="hint">補正は印刷したプリンター・給紙トレイ固有のずれも含みます。本番も同じプリンターで印刷してください。</p>
     </Section>
   );
 }

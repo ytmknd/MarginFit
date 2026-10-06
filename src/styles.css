@@ -337,6 +337,10 @@ select {
   margin-top: 4px;
   line-height: 1.45;
 }
+.offset-label {
+  color: var(--muted);
+  width: 44px;
+}
 .size-now {
   background: var(--accent-soft);
   padding: 6px 8px;
@@ -661,6 +665,13 @@ select {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px;
+}
+.align-box {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 12px 8px;
+  margin-top: 10px;
+  background: #fbf7fa;
 }
 .warnings {
   background: var(--warn-soft);

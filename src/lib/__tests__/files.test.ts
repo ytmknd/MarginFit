@@ -1,9 +1,10 @@
 import { deflateSync, inflateSync } from 'node:zlib';
-import { PDFArray, PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFRawStream } from 'pdf-lib';
 import { describe, expect, it } from 'vitest';
 import { computeLayout, initialAdjust, moveContent, setPaperSize, toPdfPlacement, type SourceGeometry } from '../geometry';
 import {
   contentMatrix,
+  createAlignmentPdf,
   createCalibrationPdf,
   exportPdfFromPdf,
   exportPdfFromPng,
@@ -168,6 +169,60 @@ describe('PDF export', () => {
     const streams = (contents instanceof PDFArray ? contents.asArray().map((r) => out.context.lookup(r)) : [contents]) as PDFRawStream[];
     const content = streams.map((s) => new TextDecoder('latin1').decode(inflateSync(s.contents))).join('\n');
     expect(content).toMatch(/(^|\s)2 0 0 2 0 0 cm/);
+  });
+
+  it('alignment test print: same page and placement as the real export, artwork faded', async () => {
+    const srcDoc = await PDFDocument.create();
+    srcDoc.addPage([mmToPt(210), mmToPt(297)]).drawRectangle({ x: 10, y: 10, width: 100, height: 100 });
+    const srcBytes = await srcDoc.save();
+    const src: SourceGeometry = { kind: 'pdf', widthMm: 210, heightMm: 297, dpi: 600 };
+    const layout = computeLayout(src, moveContent(initialAdjust(src), -1.2, 0.5));
+
+    const pageText = async (bytes: Uint8Array) => {
+      const doc = await PDFDocument.load(bytes);
+      const contents = doc.getPage(0).node.Contents();
+      const streams = (contents instanceof PDFArray ? contents.asArray().map((r) => doc.context.lookup(r)) : [contents]) as PDFRawStream[];
+      return { doc, text: streams.map((s) => new TextDecoder('latin1').decode(inflateSync(s.contents))).join('\n') };
+    };
+    const real = await pageText(await exportPdfFromPdf(srcBytes, 0, layout));
+    const test = await pageText(await createAlignmentPdf({ kind: 'pdf', bytes: srcBytes, pageIndex: 0 }, layout, 0.3));
+
+    expect(mediaBox(test.doc)).toEqual(mediaBox(real.doc));
+    const cm = (t: string) => t.match(/[-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ [-\d.]+ cm\s+\/MFContent\S* Do/)?.[0].split(/\s+cm/)[0];
+    expect(cm(test.text)).toBe(cm(real.text));
+    expect(test.text).toMatch(/\/MFAlpha\S* gs/);
+    const gs = test.doc.context
+      .enumerateIndirectObjects()
+      .map(([, o]) => o)
+      .find((o) => o instanceof PDFDict && o.get(PDFName.of('Type')) === PDFName.of('ExtGState') && o.get(PDFName.of('ca')));
+    expect((gs as PDFDict).lookup(PDFName.of('ca'), PDFNumber).asNumber()).toBeCloseTo(0.3, 6);
+  });
+
+  it('alignment test print works for PNG sources', async () => {
+    const png = makePng(600, 300, 600);
+    const src: SourceGeometry = { kind: 'png', pixelWidth: 600, pixelHeight: 300, dpi: 600, widthMm: pxToMm(600, 600), heightMm: pxToMm(300, 600) };
+    const layout = computeLayout(src, setPaperSize(initialAdjust(src), 210, 297, 'center'));
+    const doc = await PDFDocument.load(await createAlignmentPdf({ kind: 'png', bytes: png, info: readPngInfo(png) }, layout));
+    const [, , w, h] = mediaBox(doc);
+    expect(w).toBeCloseTo(mmToPt(210), 4);
+    expect(h).toBeCloseTo(mmToPt(297), 4);
+  });
+
+  it('output PDFs ask viewers not to scale when printing (/PrintScaling /None)', async () => {
+    const src: SourceGeometry = { kind: 'pdf', widthMm: 210, heightMm: 297, dpi: 600 };
+    const srcDoc = await PDFDocument.create();
+    srcDoc.addPage([mmToPt(210), mmToPt(297)]).drawRectangle({ x: 10, y: 10, width: 10, height: 10 });
+    const layout = computeLayout(src, initialAdjust(src));
+    const srcBytes = await srcDoc.save();
+    for (const bytes of [
+      await exportPdfFromPdf(srcBytes, 0, layout),
+      await createAlignmentPdf({ kind: 'pdf', bytes: srcBytes, pageIndex: 0 }, layout),
+      await createCalibrationPdf(210, 297),
+    ]) {
+      const doc = await PDFDocument.load(bytes);
+      const prefs = doc.catalog.lookup(PDFName.of('ViewerPreferences'), PDFDict);
+      expect(prefs.get(PDFName.of('PrintScaling'))).toBe(PDFName.of('None'));
+    }
   });
 
   it('calibration PDF has the requested page size', async () => {

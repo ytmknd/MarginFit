@@ -19,12 +19,14 @@ import {
   PDFNumber,
   PDFPage,
   PDFRawStream,
+  PrintScaling,
   StandardFonts,
   concatTransformationMatrix,
   drawObject,
   popGraphicsState,
   pushGraphicsState,
   rgb,
+  setGraphicsState,
 } from 'pdf-lib';
 import type { Layout, PdfPlacement } from './geometry';
 import { toPdfPlacement } from './geometry';
@@ -126,14 +128,30 @@ export function contentMatrix(p: PdfPlacement, rotation: number, formW: number, 
   }
 }
 
-function drawXObject(page: PDFPage, name: PDFName, m: Matrix) {
-  page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...m), drawObject(name), popGraphicsState());
+function drawXObject(page: PDFPage, name: PDFName, m: Matrix, alpha?: PDFName) {
+  page.pushOperators(
+    pushGraphicsState(),
+    ...(alpha ? [setGraphicsState(alpha)] : []),
+    concatTransformationMatrix(...m),
+    drawObject(name),
+    popGraphicsState(),
+  );
+}
+
+/** Registers a constant-opacity graphics state on the page (for the faint test print). */
+function opacityState(doc: PDFDocument, page: PDFPage, opacity: number): PDFName | undefined {
+  if (opacity >= 1) return undefined;
+  const ref = doc.context.register(doc.context.obj({ Type: 'ExtGState', ca: opacity, CA: opacity }));
+  return page.node.newExtGState('MFAlpha', ref);
 }
 
 function newOutputDocument(): Promise<PDFDocument> {
   return PDFDocument.create().then((doc) => {
     doc.setProducer('MarginFit');
     doc.setCreator('MarginFit');
+    // /PrintScaling /None: Acrobat and Chromium's PDF viewer then preselect
+    // "Actual size" in the print dialog instead of "Fit to page".
+    doc.catalog.getOrCreateViewerPreferences().setPrintScaling(PrintScaling.None);
     return doc;
   });
 }
@@ -146,16 +164,41 @@ function addPage(doc: PDFDocument, p: PdfPlacement): PDFPage {
   return page;
 }
 
+/** The artwork to place on an output page. */
+export type PdfArtwork =
+  | { kind: 'pdf'; bytes: Uint8Array; pageIndex: number }
+  | { kind: 'png'; bytes: Uint8Array; info: PngInfo };
+
+/** Draws the artwork onto `page` at the placement. Shared by the real export and the test print. */
+async function placeArtwork(out: PDFDocument, page: PDFPage, placement: PdfPlacement, art: PdfArtwork, opacity = 1) {
+  const alpha = opacityState(out, page, opacity);
+  if (art.kind === 'pdf') {
+    await placePdfPage(out, page, placement, art.bytes, art.pageIndex, alpha);
+  } else {
+    await placePng(out, page, placement, art.bytes, art.info, opacity, alpha);
+  }
+}
+
 /** PDF → adjusted PDF without rasterisation. */
 export async function exportPdfFromPdf(srcBytes: Uint8Array, pageIndex: number, layout: Layout): Promise<Uint8Array> {
-  const src = await loadPdfDocument(srcBytes);
-  const srcPage = src.getPage(pageIndex);
-  const info = pageInfo(src, srcPage);
-
   const out = await newOutputDocument();
   const placement = toPdfPlacement(layout);
   const page = addPage(out, placement);
+  await placePdfPage(out, page, placement, srcBytes, pageIndex);
+  return out.save({ useObjectStreams: true });
+}
 
+async function placePdfPage(
+  out: PDFDocument,
+  page: PDFPage,
+  placement: PdfPlacement,
+  srcBytes: Uint8Array,
+  pageIndex: number,
+  alpha?: PDFName,
+) {
+  const src = await loadPdfDocument(srcBytes);
+  const srcPage = src.getPage(pageIndex);
+  const info = pageInfo(src, srcPage);
   const b = info.box;
   const embedded = await out.embedPage(srcPage, {
     left: b.x,
@@ -164,9 +207,7 @@ export async function exportPdfFromPdf(srcBytes: Uint8Array, pageIndex: number, 
     top: b.y + b.height,
   });
   const name = page.node.newXObject('MFContent', embedded.ref);
-  drawXObject(page, name, contentMatrix(placement, info.rotation, embedded.width, embedded.height));
-
-  return out.save({ useObjectStreams: true });
+  drawXObject(page, name, contentMatrix(placement, info.rotation, embedded.width, embedded.height), alpha);
 }
 
 /** Builds an image XObject that reuses the PNG's IDAT stream verbatim, or null if not possible. */
@@ -209,15 +250,93 @@ export async function exportPdfFromPng(pngBytes: Uint8Array, png: PngInfo, layou
   const placement = toPdfPlacement(layout);
   // White is the natural PDF paper colour, so the background is not painted.
   const page = addPage(out, placement);
+  await placePng(out, page, placement, pngBytes, png);
+  return out.save({ useObjectStreams: true });
+}
 
+async function placePng(
+  out: PDFDocument,
+  page: PDFPage,
+  placement: PdfPlacement,
+  pngBytes: Uint8Array,
+  png: PngInfo,
+  opacity = 1,
+  alpha?: PDFName,
+) {
   const ref = directPngXObject(out, png);
   if (ref) {
     const name = page.node.newXObject('MFImage', ref);
-    drawXObject(page, name, [placement.width, 0, 0, placement.height, placement.x, placement.y]);
+    drawXObject(page, name, [placement.width, 0, 0, placement.height, placement.x, placement.y], alpha);
   } else {
     const img = await out.embedPng(pngBytes);
-    page.drawImage(img, { x: placement.x, y: placement.y, width: placement.width, height: placement.height });
+    page.drawImage(img, { x: placement.x, y: placement.y, width: placement.width, height: placement.height, opacity });
   }
+}
+
+/** Distance of the reference marks from the paper edges. */
+export const ALIGN_MARK_INSET_MM = 10;
+
+/**
+ * Alignment test print: the adjusted artwork at reduced opacity, so that it
+ * can be printed onto the real pre-printed certificate paper (or on plain
+ * paper and held against it) and the double lines compared. On top, in
+ * magenta:
+ *  - a centre cross,
+ *  - at each edge midpoint, a 20 mm line parallel to the edge exactly
+ *    ALIGN_MARK_INSET_MM from it (measure paper edge → line: should be 10.0 mm;
+ *    a difference is the printer's own offset),
+ *  - a small cross ALIGN_MARK_INSET_MM from both edges at each corner (skew check).
+ * The page size and artwork position are identical to the real export.
+ */
+export async function createAlignmentPdf(art: PdfArtwork, layout: Layout, opacity = 0.3): Promise<Uint8Array> {
+  const out = await newOutputDocument();
+  out.setTitle('MarginFit alignment test print');
+  const placement = toPdfPlacement(layout);
+  const page = addPage(out, placement);
+  await placeArtwork(out, page, placement, art, opacity);
+
+  const W = layout.paperWidthMm;
+  const H = layout.paperHeightMm;
+  const d = ALIGN_MARK_INSET_MM;
+  const color = rgb(0.85, 0, 0.55);
+  const font = await out.embedFont(StandardFonts.Helvetica);
+  // top-left-origin mm → PDF points
+  const P = (xmm: number, ymm: number) => ({ x: mmToPt(xmm), y: placement.pageHeightPt - mmToPt(ymm) });
+  const line = (x1: number, y1: number, x2: number, y2: number, thickness = 0.5) =>
+    page.drawLine({ start: P(x1, y1), end: P(x2, y2), thickness, color });
+  const text = (s: string, xmm: number, ymm: number, size = 6) => page.drawText(s, { ...P(xmm, ymm), size, font, color });
+
+  // Centre cross
+  line(W / 2 - 15, H / 2, W / 2 + 15, H / 2);
+  line(W / 2, H / 2 - 15, W / 2, H / 2 + 15);
+  text('CENTER', W / 2 + 1.5, H / 2 - 1.5);
+
+  // Edge-midpoint reference lines, 10 mm from each edge
+  if (W > 2 * d + 25 && H > 2 * d + 25) {
+    line(W / 2 - 10, d, W / 2 + 10, d);
+    line(W / 2 - 10, H - d, W / 2 + 10, H - d);
+    line(d, H / 2 - 10, d, H / 2 + 10);
+    line(W - d, H / 2 - 10, W - d, H / 2 + 10);
+    text(`${d} mm`, W / 2 + 11, d + 1);
+    text(`${d} mm`, W / 2 + 11, H - d + 1);
+    text(`${d} mm`, d + 1, H / 2 - 11);
+    text(`${d} mm`, W - d - 9, H / 2 - 11);
+
+    // Corner crosses, 10 mm from both edges
+    for (const [cx, cy] of [
+      [d, d],
+      [W - d, d],
+      [d, H - d],
+      [W - d, H - d],
+    ]) {
+      line(cx - 3, cy, cx + 3, cy, 0.3);
+      line(cx, cy - 3, cx, cy + 3, 0.3);
+    }
+  }
+
+  text('MarginFit alignment test print - print at "Actual size" (100%) on the printer and tray used for the certificates.', W / 2 - 60, H / 2 + 20);
+  text(`Magenta marks are exactly ${d} mm from the paper edges. Artwork printed at ${Math.round(opacity * 100)}% opacity.`, W / 2 - 60, H / 2 + 23);
+
   return out.save({ useObjectStreams: true });
 }
 

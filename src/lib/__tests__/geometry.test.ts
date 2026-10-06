@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   a4For,
+  correctPrintOffset,
   fitDpiToPaper,
   isImplausibleSheetSize,
   addMargin,
@@ -116,6 +117,17 @@ describe('editing operations', () => {
     const l = computeLayout(pdfA4, a);
     expect(l.content.x + l.content.width / 2).toBeCloseTo(105, 12);
     expect(l.content.width).toBeCloseTo(210.42, 12);
+  });
+});
+
+describe('correctPrintOffset', () => {
+  it('moves the artwork opposite to the measured print offset', () => {
+    // printed 1.2 mm to the right and 0.5 mm too high → move left 1.2, down 0.5
+    const a = correctPrintOffset(initialAdjust(pdfA4), 1.2, -0.5);
+    expect(a.offsetXmm).toBeCloseTo(-1.2, 12);
+    expect(a.offsetYmm).toBeCloseTo(0.5, 12);
+    expect(a.paperWidthMm).toBe(210);
+    expect(a.moveXmm).toBeCloseTo(-1.2, 12);
   });
 });
 

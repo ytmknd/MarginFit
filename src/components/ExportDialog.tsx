@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { downloadBytes, outputName } from '../lib/download';
-import { exportPdfFromPdf, exportPdfFromPng } from '../lib/pdfUtils';
+import { ALIGN_MARK_INSET_MM, createAlignmentPdf, exportPdfFromPdf, exportPdfFromPng, type PdfArtwork } from '../lib/pdfUtils';
 import { exportPng, type Background } from '../lib/pngUtils';
+import { printPdf } from '../lib/print';
 import { mmToPx } from '../lib/units';
 import type { Editor } from '../state/useEditor';
 import { formatSmart } from './common';
@@ -13,7 +14,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Busy = null | 'png' | 'pdf';
+type Busy = null | 'png' | 'pdf' | 'align' | 'print';
 
 export function ExportDialog({ editor, background, onClose }: Props) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -31,6 +32,34 @@ export function ExportDialog({ editor, background, onClose }: Props) {
     const d = ref.current;
     if (d && !d.open) d.showModal();
   }, []);
+
+  const [alignOpacity, setAlignOpacity] = useState(0.3);
+
+  /** Creates the alignment test print and either saves it or sends it to the printer. */
+  const runAlignment = async (action: 'save' | 'print') => {
+    setBusy(action === 'save' ? 'align' : 'print');
+    setError(null);
+    setDone(null);
+    await new Promise((r) => setTimeout(r, 30));
+    try {
+      const art: PdfArtwork =
+        file.kind === 'png'
+          ? { kind: 'png', bytes: file.bytes, info: file.info }
+          : { kind: 'pdf', bytes: file.bytes, pageIndex: file.pageIndex };
+      const bytes = await createAlignmentPdf(art, layout, alignOpacity);
+      if (action === 'save') {
+        downloadBytes(bytes, outputName(file.fileName, 'pdf', '_試し刷り'), 'application/pdf');
+        setDone('試し刷りPDFを保存しました。「実際のサイズ」で印刷し、実物と重ねてずれを測ってください。');
+      } else {
+        await printPdf(bytes);
+        setDone('印刷画面を開きました。倍率が「実際のサイズ（100%）」になっていることを確認して印刷してください。');
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const run = async (kind: 'png' | 'pdf') => {
     setBusy(kind);
@@ -157,6 +186,34 @@ export function ExportDialog({ editor, background, onClose }: Props) {
       )}
 
       <p className="hint">印刷・AwardPrintでは「実際のサイズ／100%」で扱ってください。ガイド線は出力に含まれません。</p>
+
+      <div className="align-box">
+        <h3>位置合わせ用の試し刷り</h3>
+        <p className="hint">
+          下絵を薄く印刷し、中心の十字と、用紙の各辺からちょうど {ALIGN_MARK_INSET_MM} mm の位置に基準マーク（マゼンタ）を入れたPDFです。
+          賞状用紙に印刷して本物の枠との二重線を見比べるか、普通紙に印刷して重ねて透かしてください。
+          紙の端から基準マークまでが {ALIGN_MARK_INSET_MM}.0 mm でなければ、その差はプリンター自体のずれです。
+          測ったずれは右側の「印刷のずれを補正」に入力します。
+        </p>
+        <div className="row">
+          <span className="offset-label">濃さ</span>
+          <select value={alignOpacity} onChange={(e) => setAlignOpacity(Number(e.target.value))} aria-label="試し刷りの下絵の濃さ">
+            <option value={0.2}>20%</option>
+            <option value={0.3}>30%</option>
+            <option value={0.5}>50%</option>
+            <option value={1}>100%</option>
+          </select>
+          <button type="button" disabled={!!busy} onClick={() => void runAlignment('print')}>
+            {busy === 'print' ? '準備中…' : 'プリンターで印刷'}
+          </button>
+          <button type="button" disabled={!!busy} onClick={() => void runAlignment('save')}>
+            {busy === 'align' ? '作成中…' : 'PDFを保存'}
+          </button>
+        </div>
+        <p className="hint">
+          「プリンターで印刷」はブラウザの印刷画面を開きます。<strong>倍率（拡大縮小）は「実際のサイズ」</strong>、余白は「なし」または「デフォルト」を選び、「用紙に合わせる」は選ばないでください。
+        </p>
+      </div>
 
       {error && <p className="error">エラー: {error}</p>}
       {done && <p className="success">{done}</p>}
